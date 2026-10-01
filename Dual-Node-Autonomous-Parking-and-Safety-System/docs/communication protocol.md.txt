@@ -1,0 +1,69 @@
+# Communication Protocol
+
+## Overview
+
+Node 1 and Node 2 communicate using UART (Universal Asynchronous Receiver/Transmitter).
+
+Node 2 acts as the safety-monitoring node and sends its current safety state to Node 1.
+
+Node 1 receives this state and uses it as a supervisory safety input during autonomous parking.
+
+---
+
+## UART Configuration
+
+| Parameter     | Value        |
+|---------------|--------------|
+| Communication | UART         |
+| Baud Rate     | 9600 bps     |
+| Data Bits     | 8            |
+| Stop Bits     | 1            |
+| Parity        | None         |
+| Mode          | Asynchronous |
+| Flow Control  | None         |
+
+---
+
+## UART Pin Connections
+
+| Node 1    | Node 2   | Function        |
+|-----------|----------|-----------------|
+| RC6 (TX)  | RC7 (RX) | Node 1 → Node 2 |
+| RC7 (RX)  | RC6 (TX) | Node 2 → Node 1 |
+| GND       | GND      | Common Ground   |
+
+The main safety-status communication is from **Node 2 TX to Node 1 RX**.
+
+---
+
+## Safety Status Protocol
+
+Node 2 sends a single character representing its current safety state.
+
+| Character | State    | Meaning                     |
+|-----------|----------|-----------------------------|
+| `S`       | SAFE     | Normal operating condition  |
+| `W`       | WARNING  | Caution condition detected  |
+| `C`       | CRITICAL | Critical condition detected |
+
+---
+
+## Message Flow
+
+Node 2
+  │
+  │ Sensor monitoring
+  ▼
+Risk Assessment
+  │
+  ├── SAFE ──────→ Send 'S'
+  │
+  ├── WARNING ───→ Send 'W'
+  │
+  └── CRITICAL ──→ Send 'C'
+                       │
+                       ▼
+                    Node 1
+                       │
+                       ▼
+                Safety Response

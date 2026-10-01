@@ -1,0 +1,26 @@
+# Hardware Wiring
+
+## Node 1 ↔ Node 2 UART
+
+ |Node 1  | Node 2  |
+ |--------|---------|
+ |RC6 (TX)| RC7 (RX)|
+ |RC7 (RX)| RC6 (TX)|
+ |GND     | GND     |
+
+## Node 1
+
+- Ultrasonic sensors connected according to `node1pinout.md`
+- LCD connected to PORTD
+- LEDs connected to RC0–RC3
+- Buzzer connected to RC4
+- Servo connected to RC5
+
+## Node 2
+
+- LDR connected to RA0AN0
+- Ultrasonic sensors connected to RB0–RB3
+- Rain gauge connected to RB4
+- Status LEDs connected to RC0–RC2
+- Buzzer connected to RC5
+- LCD connected to PORTD

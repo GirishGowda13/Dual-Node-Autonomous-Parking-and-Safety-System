@@ -1,0 +1,1236 @@
+#include <xc.h>
+#include <string.h>
+
+#define _XTAL_FREQ 20000000UL
+
+#pragma config FOSC = HS
+#pragma config WDTE = OFF
+#pragma config PWRTE = ON
+#pragma config BOREN = ON
+#pragma config LVP = OFF
+#pragma config CPD = OFF
+#pragma config WRT = OFF
+#pragma config CP = OFF
+
+
+/* =========================================================
+   NODE 1 PIN MAP
+   =========================================================
+
+   MOTOR
+   RA0 = Motor IN1
+   RA1 = Motor IN2
+   RA2 = Motor IN3
+   RA3 = Motor IN4
+
+   ULTRASONIC
+   RB0 = FRONT TRIG
+   RB1 = FRONT ECHO
+
+   RB2 = LEFT TRIG
+   RB3 = LEFT ECHO
+
+   RB4 = REAR TRIG
+   RB5 = REAR ECHO
+
+   RB6 = RIGHT TRIG
+   RB7 = RIGHT ECHO
+
+   LEDS
+   RC0 = FRONT
+   RC1 = BACK
+   RC2 = LEFT
+   RC3 = RIGHT
+
+   RC4 = BUZZER
+   RC5 = SERVO
+
+   UART
+   RC6 = TX
+   RC7 = RX
+
+   LCD
+   RD0 = RS
+   RD1 = E
+   RD4 = D4
+   RD5 = D5
+   RD6 = D6
+   RD7 = D7
+*/
+
+
+#define FRONT_TRIG RB0
+#define FRONT_ECHO RB1
+
+#define LEFT_TRIG  RB2
+#define LEFT_ECHO  RB3
+
+#define REAR_TRIG  RB4
+#define REAR_ECHO  RB5
+
+#define RIGHT_TRIG RB6
+#define RIGHT_ECHO RB7
+
+
+#define LCD_RS RD0
+#define LCD_EN RD1
+
+
+#define FRONT_STOP_CM 12
+#define SIDE_STOP_CM   8
+#define REAR_STOP_CM  10
+
+#define PARKING_GAP_CM 30
+
+#define SPACE_CONFIRM_COUNT 5
+#define MAX_PHASE_STEPS 35
+
+
+/* =========================================================
+   NODE 2 SAFETY STATE
+   ========================================================= */
+
+#define NODE2_SAFE     0
+#define NODE2_WARNING  1
+#define NODE2_CRITICAL 2
+
+volatile unsigned char node2_state = NODE2_SAFE;
+
+
+/* =========================================================
+   UART
+   ========================================================= */
+
+void UART_Init(void)
+{
+    /*
+       20 MHz crystal
+       9600 baud
+       BRGH = 1
+       SPBRG = 129
+    */
+
+    TRISC6 = 0;
+    TRISC7 = 1;
+
+    SPBRG = 129;
+
+    TXSTAbits.BRGH = 1;
+    TXSTAbits.SYNC = 0;
+    TXSTAbits.TXEN = 1;
+
+    RCSTAbits.SPEN = 1;
+    RCSTAbits.CREN = 1;
+}
+
+
+unsigned char UART_Available(void)
+{
+    return RCIF;
+}
+
+
+unsigned char UART_Read(void)
+{
+    if(OERR)
+    {
+        CREN = 0;
+        CREN = 1;
+    }
+
+    return RCREG;
+}
+
+
+/*
+   Node 2 can send:
+
+   SAFE
+   WARNING
+   CRITICAL
+
+   followed by newline.
+
+   Single characters are also accepted:
+
+   S = SAFE
+   W = WARNING
+   C = CRITICAL
+*/
+
+void UART_Process(void)
+{
+    static char buffer[12];
+    static unsigned char index = 0;
+
+    unsigned char c;
+
+
+    while(UART_Available())
+    {
+        c = UART_Read();
+
+
+        /* Single-character protocol */
+
+        if(c == 'S')
+        {
+            node2_state = NODE2_SAFE;
+            index = 0;
+            continue;
+        }
+
+        if(c == 'W')
+        {
+            node2_state = NODE2_WARNING;
+            index = 0;
+            continue;
+        }
+
+        if(c == 'C')
+        {
+            node2_state = NODE2_CRITICAL;
+            index = 0;
+            continue;
+        }
+
+
+        /* String protocol */
+
+        if(c == '\n' || c == '\r')
+        {
+            buffer[index] = '\0';
+
+
+            if(strcmp(buffer, "SAFE") == 0)
+            {
+                node2_state = NODE2_SAFE;
+            }
+
+            else if(strcmp(buffer, "WARNING") == 0)
+            {
+                node2_state = NODE2_WARNING;
+            }
+
+            else if(strcmp(buffer, "CRITICAL") == 0)
+            {
+                node2_state = NODE2_CRITICAL;
+            }
+
+
+            index = 0;
+        }
+
+        else
+        {
+            if(index < 11)
+            {
+                buffer[index++] = c;
+            }
+            else
+            {
+                index = 0;
+            }
+        }
+    }
+}
+
+
+/* =========================================================
+   LCD
+   ========================================================= */
+
+void LCD_Pulse(void)
+{
+    LCD_EN = 1;
+    __delay_us(2);
+
+    LCD_EN = 0;
+    __delay_us(100);
+}
+
+
+void LCD_Nibble(unsigned char n)
+{
+    RD4 = (n >> 0) & 1;
+    RD5 = (n >> 1) & 1;
+    RD6 = (n >> 2) & 1;
+    RD7 = (n >> 3) & 1;
+
+    LCD_Pulse();
+}
+
+
+void LCD_Command(unsigned char cmd)
+{
+    LCD_RS = 0;
+
+    LCD_Nibble(cmd >> 4);
+    LCD_Nibble(cmd & 0x0F);
+
+    __delay_ms(2);
+}
+
+
+void LCD_Char(char c)
+{
+    LCD_RS = 1;
+
+    LCD_Nibble(c >> 4);
+    LCD_Nibble(c & 0x0F);
+}
+
+
+void LCD_String(const char *s)
+{
+    while(*s)
+    {
+        LCD_Char(*s);
+        s++;
+    }
+}
+
+
+void LCD_Clear(void)
+{
+    LCD_Command(0x01);
+    __delay_ms(2);
+}
+
+
+void LCD_Line1(void)
+{
+    LCD_Command(0x80);
+}
+
+
+void LCD_Line2(void)
+{
+    LCD_Command(0xC0);
+}
+
+
+void LCD_Init(void)
+{
+    __delay_ms(20);
+
+    LCD_RS = 0;
+
+    LCD_Nibble(0x03);
+    __delay_ms(5);
+
+    LCD_Nibble(0x03);
+    __delay_us(150);
+
+    LCD_Nibble(0x03);
+
+    LCD_Nibble(0x02);
+
+    LCD_Command(0x28);
+    LCD_Command(0x0C);
+    LCD_Command(0x06);
+    LCD_Command(0x01);
+
+    __delay_ms(2);
+}
+
+
+/* =========================================================
+   TIMER1
+   ========================================================= */
+
+void Timer1_Init(void)
+{
+    T1CON = 0x10;
+
+    TMR1H = 0;
+    TMR1L = 0;
+
+    PIR1bits.TMR1IF = 0;
+}
+
+
+/* =========================================================
+   ULTRASONIC
+   ========================================================= */
+
+unsigned int measure_echo(unsigned char sensor)
+{
+    unsigned int ticks;
+    unsigned int timeout;
+
+
+    /* ---------- TRIGGER ---------- */
+
+    if(sensor == 1)
+    {
+        FRONT_TRIG = 0;
+        __delay_us(2);
+
+        FRONT_TRIG = 1;
+        __delay_us(10);
+
+        FRONT_TRIG = 0;
+    }
+
+    else if(sensor == 2)
+    {
+        LEFT_TRIG = 0;
+        __delay_us(2);
+
+        LEFT_TRIG = 1;
+        __delay_us(10);
+
+        LEFT_TRIG = 0;
+    }
+
+    else if(sensor == 3)
+    {
+        REAR_TRIG = 0;
+        __delay_us(2);
+
+        REAR_TRIG = 1;
+        __delay_us(10);
+
+        REAR_TRIG = 0;
+    }
+
+    else
+    {
+        RIGHT_TRIG = 0;
+        __delay_us(2);
+
+        RIGHT_TRIG = 1;
+        __delay_us(10);
+
+        RIGHT_TRIG = 0;
+    }
+
+
+    /* ---------- WAIT FOR ECHO HIGH ---------- */
+
+    timeout = 0;
+
+    while(1)
+    {
+        UART_Process();
+
+        if(node2_state == NODE2_CRITICAL)
+            return 999;
+
+
+        if(sensor == 1 && FRONT_ECHO)
+            break;
+
+        if(sensor == 2 && LEFT_ECHO)
+            break;
+
+        if(sensor == 3 && REAR_ECHO)
+            break;
+
+        if(sensor == 4 && RIGHT_ECHO)
+            break;
+
+
+        __delay_us(1);
+
+        timeout++;
+
+        if(timeout >= 30000)
+            return 999;
+    }
+
+
+    /* ---------- START TIMER ---------- */
+
+    TMR1H = 0;
+    TMR1L = 0;
+
+    PIR1bits.TMR1IF = 0;
+
+    T1CONbits.TMR1ON = 1;
+
+
+    /* ---------- WAIT FOR ECHO LOW ---------- */
+
+    while(1)
+    {
+        UART_Process();
+
+        if(node2_state == NODE2_CRITICAL)
+        {
+            T1CONbits.TMR1ON = 0;
+            return 999;
+        }
+
+
+        if(sensor == 1 && !FRONT_ECHO)
+            break;
+
+        if(sensor == 2 && !LEFT_ECHO)
+            break;
+
+        if(sensor == 3 && !REAR_ECHO)
+            break;
+
+        if(sensor == 4 && !RIGHT_ECHO)
+            break;
+
+
+        if(PIR1bits.TMR1IF)
+        {
+            T1CONbits.TMR1ON = 0;
+            PIR1bits.TMR1IF = 0;
+
+            return 999;
+        }
+    }
+
+
+    T1CONbits.TMR1ON = 0;
+
+    ticks = ((unsigned int)TMR1H << 8) | TMR1L;
+
+    return ticks / 145;
+}
+
+
+/* =========================================================
+   MOTOR
+   ========================================================= */
+
+void stop_vehicle(void)
+{
+    RA0 = 0;
+    RA1 = 0;
+    RA2 = 0;
+    RA3 = 0;
+}
+
+
+void move_forward(void)
+{
+    RA0 = 1;
+    RA1 = 0;
+
+    RA2 = 1;
+    RA3 = 0;
+}
+
+
+void move_reverse(void)
+{
+    RA0 = 0;
+    RA1 = 1;
+
+    RA2 = 0;
+    RA3 = 1;
+}
+
+
+/* =========================================================
+   SERVO
+   ========================================================= */
+
+void servo_center(void)
+{
+    unsigned char i;
+
+    for(i = 0; i < 5; i++)
+    {
+        RC5 = 1;
+        __delay_us(1500);
+
+        RC5 = 0;
+        __delay_ms(18);
+    }
+}
+
+
+void servo_left(void)
+{
+    unsigned char i;
+
+    for(i = 0; i < 5; i++)
+    {
+        RC5 = 1;
+        __delay_us(1000);
+
+        RC5 = 0;
+        __delay_ms(19);
+    }
+}
+
+
+void servo_right(void)
+{
+    unsigned char i;
+
+    for(i = 0; i < 5; i++)
+    {
+        RC5 = 1;
+        __delay_us(2000);
+
+        RC5 = 0;
+        __delay_ms(18);
+    }
+}
+
+
+/* =========================================================
+   BUZZER
+   ========================================================= */
+
+void buzzer_beep(void)
+{
+    RC4 = 1;
+    __delay_ms(150);
+
+    RC4 = 0;
+}
+
+
+/* =========================================================
+   LEDS
+   ========================================================= */
+
+void leds_off(void)
+{
+    RC0 = 0;
+    RC1 = 0;
+    RC2 = 0;
+    RC3 = 0;
+}
+
+
+void update_leds(
+    unsigned int front,
+    unsigned int left,
+    unsigned int rear,
+    unsigned int right)
+{
+    leds_off();
+
+
+    if(front != 999 && front <= 20)
+        RC0 = 1;
+
+    if(rear != 999 && rear <= 20)
+        RC1 = 1;
+
+    if(left != 999 && left <= 20)
+        RC2 = 1;
+
+    if(right != 999 && right <= 20)
+        RC3 = 1;
+}
+
+
+/* =========================================================
+   DISPLAY
+   ========================================================= */
+
+void show_status(
+    const char *line1,
+    const char *line2)
+{
+    LCD_Clear();
+
+    LCD_Line1();
+    LCD_String(line1);
+
+    LCD_Line2();
+    LCD_String(line2);
+}
+
+
+/* =========================================================
+   SAFETY
+   ========================================================= */
+
+unsigned char emergency_obstacle(
+    unsigned int front,
+    unsigned int left,
+    unsigned int rear,
+    unsigned int right)
+{
+    if(front != 999 &&
+       front <= FRONT_STOP_CM)
+        return 1;
+
+
+    if(left != 999 &&
+       left <= SIDE_STOP_CM)
+        return 1;
+
+
+    if(rear != 999 &&
+       rear <= REAR_STOP_CM)
+        return 1;
+
+
+    if(right != 999 &&
+       right <= SIDE_STOP_CM)
+        return 1;
+
+
+    return 0;
+}
+
+
+/* =========================================================
+   PARKING SPACE DETECTION
+   ========================================================= */
+
+unsigned char detect_parking_space(void)
+{
+    unsigned int left;
+    unsigned char gap_count = 0;
+
+
+    while(gap_count < SPACE_CONFIRM_COUNT)
+    {
+        UART_Process();
+
+
+        if(node2_state == NODE2_CRITICAL)
+            return 0;
+
+
+        left = measure_echo(2);
+
+        __delay_ms(60);
+
+
+        if(left != 999 &&
+           left >= PARKING_GAP_CM)
+        {
+            gap_count++;
+        }
+        else
+        {
+            gap_count = 0;
+        }
+    }
+
+
+    return 1;
+}
+
+
+/* =========================================================
+   AUTONOMOUS PARKING
+   ========================================================= */
+
+unsigned char autonomous_park(void)
+{
+    unsigned int front;
+    unsigned int left;
+    unsigned int rear;
+    unsigned int right;
+
+    unsigned char count;
+
+
+    /* ---------- START ---------- */
+
+    stop_vehicle();
+
+    show_status(
+        "SPACE FOUND",
+        "AUTO PARKING");
+
+    buzzer_beep();
+
+    __delay_ms(800);
+
+
+    /* ---------- PHASE 1 ---------- */
+
+    show_status(
+        "POSITIONING",
+        "PLEASE WAIT");
+
+    servo_center();
+
+    move_forward();
+
+
+    for(count = 0; count < 12; count++)
+    {
+        UART_Process();
+
+
+        if(node2_state == NODE2_CRITICAL)
+        {
+            stop_vehicle();
+
+            show_status(
+                "NODE2 CRITICAL",
+                "VEHICLE STOP");
+
+            buzzer_beep();
+
+            return 0;
+        }
+
+
+        front = measure_echo(1);
+
+        __delay_ms(40);
+
+
+        if(front != 999 &&
+           front <= FRONT_STOP_CM)
+        {
+            stop_vehicle();
+
+            show_status(
+                "OBSTACLE",
+                "AUTO STOP");
+
+            buzzer_beep();
+
+            return 0;
+        }
+    }
+
+
+    stop_vehicle();
+
+    __delay_ms(300);
+
+
+    /* ---------- PHASE 2 ---------- */
+
+    show_status(
+        "REVERSE LEFT",
+        "PARKING");
+
+    servo_left();
+
+    move_reverse();
+
+
+    for(count = 0;
+        count < MAX_PHASE_STEPS;
+        count++)
+    {
+        UART_Process();
+
+
+        if(node2_state == NODE2_CRITICAL)
+        {
+            stop_vehicle();
+
+            show_status(
+                "NODE2 CRITICAL",
+                "VEHICLE STOP");
+
+            buzzer_beep();
+
+            return 0;
+        }
+
+
+        left = measure_echo(2);
+
+        __delay_ms(35);
+
+        rear = measure_echo(3);
+
+        __delay_ms(35);
+
+        right = measure_echo(4);
+
+        __delay_ms(35);
+
+
+        if(emergency_obstacle(
+                999,
+                left,
+                rear,
+                right))
+        {
+            stop_vehicle();
+
+            show_status(
+                "OBSTACLE",
+                "AUTO STOP");
+
+            buzzer_beep();
+
+            return 0;
+        }
+
+
+        if(rear != 999 &&
+           rear <= 15)
+            break;
+    }
+
+
+    stop_vehicle();
+
+    __delay_ms(300);
+
+
+    /* ---------- PHASE 3 ---------- */
+
+    show_status(
+        "CORRECTING",
+        "ALIGNING");
+
+
+    for(count = 0; count < 15; count++)
+    {
+        UART_Process();
+
+
+        if(node2_state == NODE2_CRITICAL)
+        {
+            stop_vehicle();
+
+            show_status(
+                "NODE2 CRITICAL",
+                "VEHICLE STOP");
+
+            buzzer_beep();
+
+            return 0;
+        }
+
+
+        left = measure_echo(2);
+
+        __delay_ms(30);
+
+        right = measure_echo(4);
+
+        __delay_ms(30);
+
+        rear = measure_echo(3);
+
+        __delay_ms(30);
+
+
+        if(left != 999 &&
+           right != 999)
+        {
+            if(left > right + 5)
+                servo_left();
+
+            else if(right > left + 5)
+                servo_right();
+
+            else
+                servo_center();
+        }
+
+
+        if(rear != 999 &&
+           rear <= REAR_STOP_CM)
+            break;
+
+
+        move_reverse();
+
+        __delay_ms(120);
+
+        stop_vehicle();
+
+        __delay_ms(80);
+    }
+
+
+    /* ---------- CENTER ---------- */
+
+    stop_vehicle();
+
+    show_status(
+        "CENTERING",
+        "PLEASE WAIT");
+
+    servo_center();
+
+    __delay_ms(500);
+
+
+    /* ---------- FINAL CHECK ---------- */
+
+    front = measure_echo(1);
+
+    __delay_ms(50);
+
+    left = measure_echo(2);
+
+    __delay_ms(50);
+
+    rear = measure_echo(3);
+
+    __delay_ms(50);
+
+    right = measure_echo(4);
+
+
+    if(emergency_obstacle(
+            front,
+            left,
+            rear,
+            right))
+    {
+        stop_vehicle();
+
+        show_status(
+            "PARKING FAILED",
+            "OBSTACLE");
+
+        buzzer_beep();
+
+        return 0;
+    }
+
+
+    /* ---------- PARKED ---------- */
+
+    stop_vehicle();
+
+    servo_center();
+
+    show_status(
+        "PARKED",
+        "AUTO MODE");
+
+    buzzer_beep();
+
+    __delay_ms(150);
+
+    buzzer_beep();
+
+    __delay_ms(5000);
+
+    return 1;
+}
+
+
+/* =========================================================
+   MAIN
+   ========================================================= */
+
+void main(void)
+{
+    unsigned int front;
+    unsigned int left;
+    unsigned int rear;
+    unsigned int right;
+
+
+    /* ---------- DIGITAL ---------- */
+
+    ADCON1 = 0x06;
+
+
+    /* ---------- PORT A ---------- */
+
+    TRISA = 0x00;
+
+
+    /* ---------- PORT B ---------- */
+
+    TRISB = 0xAA;
+
+
+    /* ---------- PORT C ---------- */
+
+    /*
+       RC0-5 = OUTPUT
+       RC6    = TX OUTPUT
+       RC7    = RX INPUT
+    */
+
+    TRISC = 0x80;
+
+
+    /* ---------- PORT D ---------- */
+
+    TRISD = 0x00;
+
+
+    /* ---------- CLEAR ---------- */
+
+    PORTA = 0x00;
+    PORTB = 0x00;
+    PORTC = 0x00;
+    PORTD = 0x00;
+
+
+    /* ---------- INITIALIZE ---------- */
+
+    Timer1_Init();
+
+    LCD_Init();
+
+    UART_Init();
+
+    stop_vehicle();
+
+    leds_off();
+
+    RC4 = 0;
+
+    servo_center();
+
+
+    /* ---------- START SCREEN ---------- */
+
+    show_status(
+        "NODE 1",
+        "AUTOPARK");
+
+    __delay_ms(2000);
+
+
+    /* =====================================================
+       MAIN LOOP
+       ===================================================== */
+
+    while(1)
+    {
+        /* ---------- RECEIVE NODE 2 STATUS ---------- */
+
+        UART_Process();
+
+
+        /* ---------- CRITICAL OVERRIDE ---------- */
+
+        if(node2_state == NODE2_CRITICAL)
+        {
+            stop_vehicle();
+
+            leds_off();
+
+            RC0 = 1;
+            RC1 = 1;
+            RC2 = 1;
+            RC3 = 1;
+
+            show_status(
+                "NODE2 CRITICAL",
+                "VEHICLE STOP");
+
+            buzzer_beep();
+
+            __delay_ms(300);
+
+            continue;
+        }
+
+
+        /* ---------- READ NODE 1 SENSORS ---------- */
+
+        front = measure_echo(1);
+
+        __delay_ms(50);
+
+        left = measure_echo(2);
+
+        __delay_ms(50);
+
+        rear = measure_echo(3);
+
+        __delay_ms(50);
+
+        right = measure_echo(4);
+
+        __delay_ms(50);
+
+
+        /* ---------- NODE 1 LEDS ---------- */
+
+        update_leds(
+            front,
+            left,
+            rear,
+            right);
+
+
+        /* ---------- LOCAL OBSTACLE ---------- */
+
+        if(emergency_obstacle(
+                front,
+                left,
+                rear,
+                right))
+        {
+            stop_vehicle();
+
+            show_status(
+                "OBSTACLE",
+                "VEHICLE STOP");
+
+            buzzer_beep();
+
+            __delay_ms(400);
+
+            continue;
+        }
+
+
+        /* ---------- NODE 2 WARNING ---------- */
+
+        if(node2_state == NODE2_WARNING)
+        {
+            stop_vehicle();
+
+            show_status(
+                "NODE2 WARNING",
+                "DRIVE CAUTION");
+
+            __delay_ms(300);
+        }
+
+
+        /* ---------- NORMAL PARKING ---------- */
+
+        if(node2_state == NODE2_SAFE)
+        {
+            show_status(
+                "SEARCHING",
+                "FOR SPACE");
+
+            servo_center();
+
+            move_forward();
+
+
+            /* Parking gap */
+
+            if(left != 999 &&
+               left >= PARKING_GAP_CM)
+            {
+                stop_vehicle();
+
+                show_status(
+                    "SPACE FOUND",
+                    "CHECKING...");
+
+                __delay_ms(500);
+
+
+                if(detect_parking_space())
+                {
+                    autonomous_park();
+                }
+                else
+                {
+                    move_forward();
+                }
+            }
+        }
+
+
+        UART_Process();
+
+        __delay_ms(100);
+    }
+}

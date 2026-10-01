@@ -1,0 +1,96 @@
+# Testing and Validation
+
+## Overview
+
+The Dual-Node Autonomous Parking and Safety System was tested at both the individual-node level and at the complete system level.
+
+Testing was performed to verify sensor operation, actuator control, autonomous parking, UART communication, and safety-state handling.
+
+---
+
+## Node 1 Testing
+
+| Test                    | Expected Result                           |Result|
+|-------------------------|-------------------------------------------|------|
+| Front ultrasonic sensor | Detects front obstacles                   | PASS |
+| Left ultrasonic sensor  | Detects left-side distance                | PASS |
+| Rear ultrasonic sensor  | Detects rear obstacles                    | PASS |
+| Right ultrasonic sensor | Detects right-side distance               | PASS |
+| Directional LEDs        | Indicate corresponding direction/obstacle | PASS |
+| Buzzer                  | Activates during warning conditions       | PASS |
+| Servo motor             | Performs steering movement                | PASS |
+| LCD                     | Displays parking/system status            | PASS |
+| Parking-space detection | Detects available parking space           | PASS |
+| Autonomous parking      | Executes parking sequence                 | PASS |
+| Obstacle detection      | Stops vehicle when obstacle is detected   | PASS |
+
+---
+
+## Node 2 Testing
+
+| Test                | Expected Result                     |Result|
+|---------------------|-------------------------------------|------|
+| Ultrasonic Sensor 1 | Measures distance                   | PASS |
+| Ultrasonic Sensor 2 | Measures distance                   | PASS |
+| LDR                 | Reads ambient light level           | PASS |
+| Rain Gauge          | Detects rain events                 | PASS |
+| Green LED           | Indicates SAFE state                | PASS |
+| Yellow LED          | Indicates WARNING state             | PASS |
+| Red LED             | Indicates CRITICAL state            | PASS |
+| Buzzer              | Activates during critical condition | PASS |
+| LCD                 | Displays sensor/status information  | PASS |
+| Risk assessment     | Generates safety state              | PASS |
+
+---
+
+## UART Communication Testing
+
+| Test                    | Expected Result            |Result|
+|-------------------------|----------------------------|------|
+| SAFE transmission       | Node 2 sends `S`           | PASS |
+| WARNING transmission    | Node 2 sends `W`           | PASS |
+| CRITICAL transmission   | Node 2 sends `C`           | PASS |
+| Node 1 receives SAFE    | Normal operation continues | PASS |
+| Node 1 receives WARNING | Warning state is activated | PASS |
+| Node 1 receives CRITICAL| Vehicle stops              | PASS |
+
+---
+
+## Integrated System Testing
+
+### Test 1 – Normal Operation
+
+**Condition:** Node 2 reports SAFE.
+
+**Expected:** Node 1 continues autonomous parking operation.
+
+**Result:** PASS
+
+---
+
+### Test 2 – Warning Condition
+
+**Condition:** Node 2 detects a warning-level condition.
+
+**Expected:** Node 2 indicates WARNING and sends `W` to Node 1.
+
+**Result:** PASS
+
+---
+
+### Test 3 – Critical Condition
+
+**Condition:** Node 2 detects a critical condition.
+
+**Expected:**
+
+```text
+Node 2
+   ↓
+CRITICAL
+   ↓
+Send 'C'
+   ↓
+Node 1
+   ↓
+Stop Vehicle
